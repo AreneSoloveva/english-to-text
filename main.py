@@ -35,4 +35,4 @@ uploaded_file = st.file_uploader("📁 Загрузите изображение
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Оригинал", usecaption("TrOCR + Streamlit Cloud • 2026")
+    st.image(image, caption="Оригинал", usecaption("TrOCR + Streamlit Cloud • 2026"))
