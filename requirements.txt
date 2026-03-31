@@ -1,7 +1,12 @@
-torch
-torchvision  
-transformers==4.44.2
-pillow
-accelerate
-sentencepiece
 streamlit==1.38.0
+pillow==10.4.0
+transformers==4.44.2
+torch==2.1.0+cpu
+torchvision==0.16.0+cpu
+torchaudio==2.1.0+cpu
+--index-url https://download.pytorch.org/whl/cpu
+accelerate==0.27.0
+sentencepiece==0.2.0
+protobuf==4.25.0
+requests==2.31.0
+numpy==1.24.3
