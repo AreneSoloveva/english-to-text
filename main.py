@@ -1,7 +1,5 @@
 import streamlit as st
 from PIL import Image, ImageEnhance, ImageFilter
-import io
-import numpy as np
 import re
 
 # Hugging Face TrOCR
@@ -35,4 +33,29 @@ uploaded_file = st.file_uploader("📁 Загрузите изображение
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Оригинал", usecaption("TrOCR + Streamlit Cloud • 2026"))
+    st.image(image, caption="Оригинал", use_container_width=True)
+    
+    if st.button("🚀 **Распознать текст**", type="primary"):
+        with st.spinner("🔄 TrOCR распознаёт текст... (это может занять 5–15 сек)"):
+            # Предобработка
+            processed = preprocess_image(image)
+            
+            # Распознавание с помощью TrOCR
+            pixel_values = processor(images=processed, return_tensors="pt").pixel_values
+            generated_ids = model.generate(pixel_values, max_new_tokens=100)
+            english_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            
+            # Очистка текста
+            english_text = re.sub(r'\s+', ' ', english_text).strip()
+        
+        # Вывод результата
+        st.success("🇬🇧 **Распознанный английский текст:**")
+        st.code(english_text, language="text")
+
+st.info("""
+**Используется модель:** microsoft/trocr-base-printed  
+✅ Хорошо работает с печатным английским текстом  
+⚠️ На Streamlit Cloud используется CPU-версия (работает медленнее)
+""")
+
+st.caption("TrOCR OCR | Streamlit Cloud 2026")
