@@ -1,6 +1,8 @@
 streamlit
-pillow
-numpy
-easyocr
+transformers
 torch
 torchvision
+pillow
+accelerate
+sentencepiece
+protobuf
