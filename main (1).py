@@ -3,7 +3,6 @@
 !pip install -q torch torchvision transformers pillow accelerate sentencepiece protobuf
 
 # Импорты
-import streamlit as st
 import torch
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel, MarianMTModel, MarianTokenizer
 from PIL import Image
