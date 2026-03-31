@@ -1,0 +1,7 @@
+torch
+torchvision  
+transformers==4.44.2
+pillow
+accelerate
+sentencepiece
+streamlit==1.38.0
