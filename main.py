@@ -3,89 +3,121 @@ from PIL import Image, ImageEnhance, ImageFilter
 import re
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 import torch
+from difflib import SequenceMatcher
 
-# Кэшируем модель (загружается один раз при запуске)
+# ====================== ДОСТУПНЫЕ МОДЕЛИ ======================
+AVAILABLE_MODELS = {
+    "Английский (оригинал)": "microsoft/trocr-base-printed",
+    "Немецкий (German)": "microsoft/trocr-base-printed",           # пока используем базовую, можно заменить на fine-tuned позже
+    "Французский (French)": "agomberto/trocr-base-printed-fr",     # популярная fine-tuned версия
+    "Испанский (Spanish)": "qantev/trocr-base-spanish"             # хорошая fine-tuned версия для испанского
+}
+
+# Кэшируем загрузку моделей
 @st.cache_resource
-def load_trocr_model():
-    processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-printed")
-    model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-printed")
+def load_model(model_name: str):
+    st.info(f"Загружаем модель: **{model_name}** ...", icon="⏳")
+    processor = TrOCRProcessor.from_pretrained(model_name)
+    model = VisionEncoderDecoderModel.from_pretrained(model_name)
     return processor, model
 
 
-# Загружаем модель
-processor, model = load_trocr_model()
-
 st.set_page_config(
-    page_title="TrOCR OCR",
+    page_title="TrOCR OCR — Multilingual",
     page_icon="🔍",
     layout="wide"
 )
 
-st.title("🔍 **TrOCR OCR**")
-st.markdown("### Распознавание печатного английского текста\n**Модель:** `microsoft/trocr-base-printed`")
+st.title("🔍 **TrOCR OCR** — Распознавание текста")
+st.markdown("### Поддержка английского, немецкого, французского и испанского языков")
 
-# Предобработка изображения (оптимально для TrOCR)
+# ====================== ВЫБОР МОДЕЛИ ======================
+st.sidebar.header("⚙️ Настройки модели")
+selected_language = st.sidebar.selectbox(
+    "Выберите язык:",
+    options=list(AVAILABLE_MODELS.keys()),
+    index=0
+)
+
+model_name = AVAILABLE_MODELS[selected_language]
+
+# Загружаем выбранную модель
+processor, model = load_model(model_name)
+
+# ====================== ПРЕДОБРАБОТКА ======================
 def preprocess_image(image):
-    """Увеличение контраста + медианный фильтр"""
     enhancer = ImageEnhance.Contrast(image)
     enhanced = enhancer.enhance(2.0)
     enhanced = enhanced.filter(ImageFilter.MedianFilter())
     return enhanced
 
 
-# Загрузка изображения
+# ====================== ОСНОВНОЙ ИНТЕРФЕЙС ======================
 uploaded_file = st.file_uploader(
-    "📁 Загрузите изображение с печатным текстом",
+    "📁 Загрузите изображение с текстом",
     type=['png', 'jpg', 'jpeg', 'tiff']
 )
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
-    
-    # Показываем оригинал
     st.image(image, caption="📸 Оригинальное изображение", use_container_width=True)
 
-    if st.button("🚀 **Распознать текст (OCR)**", type="primary"):
-        with st.spinner("🔄 TrOCR распознаёт текст..."):
-            # Предобработка
-            processed_image = preprocess_image(image)
-            
-            # Подготовка для модели
-            pixel_values = processor(
-                images=processed_image,
-                return_tensors="pt"
-            ).pixel_values
+    expected_text = st.text_area(
+        "Ожидаемый текст (для сравнения):",
+        height=80,
+        placeholder="Вставьте сюда правильный текст с изображения..."
+    )
 
-            # Инференс
+    # Кнопка распознавания
+    if st.button("🚀 **Распознать текст**", type="primary", use_container_width=True):
+        with st.spinner(f"🔄 Распознавание с помощью модели **{selected_language}**..."):
+            processed = preprocess_image(image)
+
+            pixel_values = processor(images=processed, return_tensors="pt").pixel_values
+
             with torch.no_grad():
                 generated_ids = model.generate(
                     pixel_values,
-                    max_new_tokens=512  # на случай длинного текста
+                    max_new_tokens=512,
+                    num_beams=5,
+                    early_stopping=True,
+                    length_penalty=1.0
                 )
 
-            # Декодирование
-            english_text = processor.batch_decode(
-                generated_ids,
-                skip_special_tokens=True
-            )[0]
-
-            # Базовая очистка текста
-            english_text = re.sub(r'\s+', ' ', english_text).strip()
+            recognized_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            recognized_text = re.sub(r'\s+', ' ', recognized_text).strip()
 
         # Результат
-        st.success("✅ **Распознанный текст:**")
-        st.code(english_text, language="text")
+        st.success(f"**Распознанный текст ({selected_language})**")
+        st.code(recognized_text, language="text")
 
-        # Дополнительно показываем предобработанное изображение (для отладки)
-        with st.expander("Показать предобработанное изображение (для отладки)"):
-            st.image(processed_image, caption="Предобработанное изображение", use_container_width=True)
+        # Сравнение, если пользователь ввёл ожидаемый текст
+        if expected_text.strip():
+            similarity = SequenceMatcher(None, recognized_text.lower(), expected_text.lower()).ratio()
+            cer_approx = 1 - similarity
 
-# Информация о модели
-st.info("""
-**Используемая модель:**  
-**microsoft/trocr-base-printed** — одна из лучших открытых моделей для распознавания печатного текста (printed text).
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Схожесть", f"{similarity:.1%}")
+            with col2:
+                st.metric("Примерный CER", f"{cer_approx:.1%}")
 
-TrOCR (Transformer-based OCR) от Microsoft показывает отличные результаты на чётком печатном английском тексте.
+            st.info(f"**Ожидаемый текст:**\n{expected_text}")
+
+        with st.expander("Предобработанное изображение (отладка)"):
+            st.image(processed, use_container_width=True)
+
+# ====================== ИНФОРМАЦИЯ ======================
+st.info(f"""
+**Текущая модель:** `{model_name}`
+
+- **Английский** — отличное качество (оригинальная модель)
+- **Немецкий** — среднее качество
+- **Французский** — улучшено благодаря fine-tuned модели
+- **Испанский** — улучшено благодаря fine-tuned модели
+
+Для лучших результатов на немецком можно позже добавить специализированные fine-tuned модели.
 """)
 
+st.caption("TrOCR • Streamlit • Поддержка нескольких языков • 2026")
 st.caption("TrOCR + Streamlit • 2026")
