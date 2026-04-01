@@ -83,7 +83,7 @@ if uploaded_file is not None:
 # Информация о модели
 st.info("""
 **Используемая модель:**  
-**microsoft/trocr-base-printed** — одна из лучших открытых моделей для распознавания печатного текста (printed text).
+**microsoft/trocr-base-printed** — одна из лучших открытых моделей для распознавания печатного текста.
 
 TrOCR (Transformer-based OCR) от Microsoft показывает отличные результаты на чётком печатном английском тексте.
 """)
