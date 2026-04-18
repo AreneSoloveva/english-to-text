@@ -103,7 +103,7 @@ if uploaded_file is not None:
 
         # ДОБАВЛЕНО: сохраняем результаты в session_state вместо прямого вывода
         st.session_state.english_text = english_text
-        st.session_state.processed_image = processed
+        st.session_state.processed_image = processed_image
         st.session_state.russian_text = None  # сбрасываем перевод
         st.rerun() # ДОБАВЛЕНО: перезапускаем скрипт, чтобы показать кнопку перевода
 
