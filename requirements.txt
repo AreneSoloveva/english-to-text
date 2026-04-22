@@ -1,6 +1,9 @@
 streamlit
 pillow
 numpy
-transformers
 torch
+torchvision
+transformers
 deep_translator
+easyocr
+opencv-python-headless
