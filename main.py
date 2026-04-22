@@ -201,7 +201,7 @@ if uploaded_file is not None:
 
 # Информация о модели
 st.info("""
-**Используемая модель:**  
+**Используемы модели:**  
 **microsoft/trocr-base-printed** — модель для распознавания печатного текста.
 
 TrOCR (Transformer-based OCR) от Microsoft показывает отличные результаты на чётком печатном английском тексте.
