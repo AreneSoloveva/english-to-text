@@ -3,14 +3,22 @@ from PIL import Image, ImageEnhance, ImageFilter
 import re
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 import torch
+import numpy as np
+import easyocr
 from deep_translator import GoogleTranslator
 
 # Кэшируем модель (загружается один раз при запуске)
 @st.cache_resource
-def load_trocr_model():
-    processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-printed")
-    model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-printed")
-    return processor, model
+def load_trocr():
+    trocr_processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-printed")
+    trocr_model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-printed")
+    return trocr_processor, trocr_model
+
+# ДОБАВЛЕНО: кэширование модели с детектером
+@st.cache_resource
+def load_easyocr():
+    # EasyOCR с детектором CRAFT (по умолчанию)
+    return easyocr.Reader(['en'], gpu=False)
 
 # ДОБАВЛЕНО: кэширование переводчика
 @st.cache_resource
@@ -18,7 +26,8 @@ def get_translator():
     return GoogleTranslator(source='en', target='ru')
 
 # Загружаем модель
-processor, model = load_trocr_model()
+trocr_processor, trocr_model = load_trocr()
+easyocr_reader = load_easyocr()
 translator = get_translator()
 
 # ДОБАВЛЕНО: функция перевода текста с английского на русский
@@ -43,6 +52,86 @@ def preprocess_image(image):
     enhanced = enhanced.filter(ImageFilter.MedianFilter())
     return enhanced
 
+# ДОБАВЛЕНО: группировка боксов строки
+def group_boxes_by_line(boxes_with_centers, y_threshold=15):
+    """
+    boxes_with_centers: list of (bbox, center_x, center_y)
+    Возвращает list of list of bbox (каждый внутренний список — одна строка текста).
+    """
+    if not boxes_with_centers:
+        return []
+    # Сортируем по Y (центру)
+    boxes_with_centers.sort(key=lambda x: x[2])
+    lines = []
+    current_line = [boxes_with_centers[0]]
+    for box in boxes_with_centers[1:]:
+        # Если разница по Y с первым боксом текущей строки меньше порога
+        if abs(box[2] - current_line[0][2]) <= y_threshold:
+            current_line.append(box)
+        else:
+            # Сортируем текущую строку по X (слева направо)
+            current_line.sort(key=lambda x: x[1])
+            lines.append([b[0] for b in current_line])  # сохраняем только bbox
+            current_line = [box]
+    if current_line:
+        current_line.sort(key=lambda x: x[1])
+        lines.append([b[0] for b in current_line])
+    return lines
+
+# ДОБАВЛЕНО: детекция (CRAFT) + распознавание (TrOCR)
+def detect_and_recognize(image):
+    """
+    Принимает PIL Image.
+    Возвращает распознанный английский текст (строка).
+    """
+    # Конвертируем PIL -> numpy (EasyOCR)
+    img_np = np.array(image.convert('RGB'))
+    # Получаем боксы (detail=1 возвращает (bbox, text, confidence))
+    results = easyocr_reader.readtext(img_np, paragraph=False, detail=1)
+    if not results:
+        return ""
+
+    # Вычисляем центры боксов
+    boxes_with_centers = []
+    for (bbox, _, _) in results:
+        x_coords = [p[0] for p in bbox]
+        y_coords = [p[1] for p in bbox]
+        center_x = sum(x_coords) / 4
+        center_y = sum(y_coords) / 4
+        boxes_with_centers.append((bbox, center_x, center_y))
+
+    # Группируем в строки
+    lines = group_boxes_by_line(boxes_with_centers, y_threshold=15)
+
+    recognized_lines = []
+    for line_boxes in lines:
+        # Объединяем все боксы строки в одну область
+        all_x = []
+        all_y = []
+        for bbox in line_boxes:
+            for (x, y) in bbox:
+                all_x.append(x)
+                all_y.append(y)
+        x_min = int(min(all_x))
+        x_max = int(max(all_x))
+        y_min = int(min(all_y))
+        y_max = int(max(all_y))
+
+        # Вырезаем область строки
+        cropped = image.crop((x_min, y_min, x_max, y_max))
+
+        # Распознаём через TrOCR
+        pixel_values = trocr_processor(images=cropped, return_tensors="pt").pixel_values
+        with torch.no_grad():
+            generated_ids = trocr_model.generate(pixel_values, max_new_tokens=128)
+        line_text = trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        recognized_lines.append(line_text.strip())
+
+    # Склеиваем строки через пробел
+    full_text = ' '.join(recognized_lines)
+    full_text = re.sub(r'\s+', ' ', full_text).strip()
+    return full_text
+
 # ДОБАВЛЕНО: инициализация переменных состояния для хранения распознанного текста, перевода и обработанного изображения
 if 'english_text' not in st.session_state:
     st.session_state.english_text = None
@@ -59,7 +148,7 @@ st.set_page_config(
 )
 
 st.title("🔍 **TrOCR OCR**")
-st.markdown("### Распознавание печатного английского текста\n**Модель:** `microsoft/trocr-base-printed`")
+st.markdown("### Распознавание печатного английского текста\n**Детектор:** CRAFT (через EasyOCR) | **Распознаватель:** `microsoft/trocr-base-printed`")
 
 
 # Загрузка изображения
@@ -75,37 +164,19 @@ if uploaded_file is not None:
     st.image(image, caption="📸 Оригинальное изображение", use_container_width=True)
 
     if st.button("🚀 **Распознать текст (OCR)**", type="primary"):
-        with st.spinner("🔄 TrOCR распознаёт текст..."):
+        with st.spinner("🔄 Детекция (CRAFT) + распознавание (TrOCR)..."):
             # Предобработка
-            processed_image = preprocess_image(image)
-            
-            # Подготовка для модели
-            pixel_values = processor(
-                images=processed_image,
-                return_tensors="pt"
-            ).pixel_values
+            processed = preprocess_image(image)
+            english_text = detect_and_recognize(processed)
 
-            # Инференс
-            with torch.no_grad():
-                generated_ids = model.generate(
-                    pixel_values,
-                    max_new_tokens=512  # на случай длинного текста
-                )
-
-            # Декодирование
-            english_text = processor.batch_decode(
-                generated_ids,
-                skip_special_tokens=True
-            )[0]
-
-            # Базовая очистка текста
-            english_text = re.sub(r'\s+', ' ', english_text).strip()
-
-        # ДОБАВЛЕНО: сохраняем результаты в session_state вместо прямого вывода
-        st.session_state.english_text = english_text
-        st.session_state.processed_image = processed_image
-        st.session_state.russian_text = None  # сбрасываем перевод
-        st.rerun() # ДОБАВЛЕНО: перезапускаем скрипт, чтобы показать кнопку перевода
+        if not english_text:
+            st.warning("⚠️ Текст не найден на изображении.")
+            st.session_state.english_text = None
+        else:
+            st.session_state.english_text = english_text
+            st.session_state.processed_image = processed
+            st.session_state.russian_text = None
+        st.rerun()
 
         # Результат (показывается, если текст уже распознан)
     if st.session_state.english_text:
@@ -131,9 +202,11 @@ if uploaded_file is not None:
 # Информация о модели
 st.info("""
 **Используемая модель:**  
-**microsoft/trocr-base-printed** — одна из лучших открытых моделей для распознавания печатного текста.
+**microsoft/trocr-base-printed** — модель для распознавания печатного текста.
 
 TrOCR (Transformer-based OCR) от Microsoft показывает отличные результаты на чётком печатном английском тексте.
+
+**CRAFT** (через EasyOCR) — детектор текста, находит строки.
 """)
 
 # ДОБАВЛЕНО: информационный блок о переводчике
